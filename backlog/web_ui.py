@@ -1,4 +1,4 @@
-# Copyright (C) 2009 John Szakmeister
+# Copyright (C) 2009, 2011, 2013 John Szakmeister
 # All rights reserved.
 #
 # This software is licensed as described in the file LICENSE.txt, which
@@ -14,9 +14,9 @@ from trac.perm import IPermissionRequestor
 from trac.ticket.api import ITicketChangeListener
 from trac.ticket.model import Ticket
 from trac.web.chrome import INavigationContributor, ITemplateProvider
-from trac.web.chrome import add_script, add_stylesheet
+from trac.web.chrome import add_stylesheet
 from trac.web.main import IRequestHandler
-from trac.web.api import HTTPBadRequest, RequestDone
+from trac.web.api import HTTPBadRequest
 from trac.util.datefmt import format_date
 from trac.util.html import html
 from trac.util import get_reporter_id
@@ -42,8 +42,8 @@ UNSCHEDULED_BACKLOG_QUERY = '''SELECT id FROM ticket t
 '''
 
 MILESTONE_QUERY = '''SELECT name, due FROM milestone
-  WHERE completed == 0
-  ORDER BY (due == 0), due, UPPER(name), name
+  WHERE completed = 0
+  ORDER BY (due = 0), due, UPPER(name), name
 '''
 
 
@@ -82,27 +82,28 @@ class BacklogPlugin(Component):
         if not row or int(row[0]) < schema_version:
             return True
 
-        cur.execute("SELECT COUNT(*) FROM ticket")
-        tickets = cur.fetchone()[0]
-
-        no_backlog = False
-        try:
-            cur.execute("SELECT COUNT(*) FROM backlog")
-            backlog_entries = cur.fetchone()[0]
-        except OperationalError:
-            no_backlog = True
-
-        if no_backlog:
+        cur.execute("SELECT COUNT(*) FROM backlog "
+                    "LEFT JOIN ticket ON ticket.id = backlog.ticket_id "
+                    "WHERE ticket.id IS NULL")
+        num_ranks_without_tickets = cur.fetchone()[0]
+        if num_ranks_without_tickets:
             return True
 
-        if tickets != backlog_entries:
+        cur.execute("SELECT COUNT(*) FROM ticket AS t LEFT JOIN backlog "
+                    "ON t.id = backlog.ticket_id WHERE backlog.ticket_id "
+                    "IS NULL")
+
+        num_tickets_without_ranks = cur.fetchone()[0]
+
+        if num_tickets_without_ranks:
             return True
 
         return False
 
     def upgrade_environment(self, db):
         cur = db.cursor()
-        cur.execute("SELECT value FROM system WHERE name='backlog_schema_version'")
+        cur.execute(
+                "SELECT value FROM system WHERE name='backlog_schema_version'")
         row = cur.fetchone()
 
         if not row:
@@ -112,16 +113,32 @@ class BacklogPlugin(Component):
             ### We'll implement that later. :-)
             pass
 
+        # Clean out any ranks that don't have tickets.
+        cur.execute("DELETE FROM backlog WHERE ticket_id NOT IN "
+                    "(SELECT id FROM ticket)")
+
+        cur.execute("SELECT MAX(rank) FROM backlog")
+        row = cur.fetchone()
+
+        # If the backlog table is empty, simply start with 1.
+        if row[0] is not None:
+            rank = row[0] + 1
+        else:
+            rank = 1
+
         # Make sure that all tickets have a rank
-        cur.execute("SELECT t.id FROM ticket AS t LEFT JOIN backlog " +
-                    "ON t.id = backlog.ticket_id WHERE backlog.ticket_id IS NULL")
+        cur.execute("SELECT t.id FROM ticket AS t LEFT JOIN backlog "
+                    "ON t.id = backlog.ticket_id WHERE backlog.ticket_id "
+                    "IS NULL")
 
         for row in cur.fetchall():
             ticket_id = row[0]
 
             # Insert a default rank for the ticket, using the ticket id
             cur.execute("INSERT INTO backlog VALUES (%s,%s)",
-                        (ticket_id, ticket_id))
+                        (ticket_id, rank))
+
+            rank += 1
 
         db.commit()
 
@@ -149,10 +166,18 @@ class BacklogPlugin(Component):
     def ticket_created(self, ticket):
         db = self.env.get_db_cnx()
         cursor = db.cursor()
+        cursor.execute("BEGIN")
 
         try:
+            cursor.execute("SELECT MAX(rank) FROM backlog")
+            rank = cursor.fetchone()[0]
+            if rank is None:
+                rank = 1
+            else:
+                rank += 1
+
             cursor.execute("INSERT INTO backlog VALUES (%s, %s)",
-                           (ticket.id, ticket.id))
+                           (ticket.id, rank))
             db.commit()
         except:
             db.rollback()
@@ -161,8 +186,17 @@ class BacklogPlugin(Component):
     def ticket_changed(self, ticket, comment, author, old_values):
         pass
 
-    def ticket_deleted(ticket):
-        pass
+    def ticket_deleted(self, ticket):
+        db = self.env.get_db_cnx()
+        cursor = db.cursor()
+
+        try:
+            cursor.execute("DELETE FROM backlog WHERE ticket_id = %s",
+                           (ticket.id,))
+            db.commit()
+        except:
+            db.rollback()
+            raise
 
     # IRequestHandler methods
     def match_request(self, req):
@@ -348,8 +382,9 @@ class BacklogPlugin(Component):
         req.write(data)
 
     def _get_num_tickets(self, cursor, milestone):
-        cursor.execute("SELECT COUNT(*) FROM ticket WHERE status <> 'closed' AND milestone = %s",
-                       (milestone,));
+        cursor.execute(
+                "SELECT COUNT(*) FROM ticket WHERE status <> 'closed'"
+                "AND milestone = %s", (milestone,));
         return cursor.fetchone()[0]
 
     def _get_active_milestones(self, exclude = None):
@@ -425,5 +460,3 @@ class BacklogPlugin(Component):
         req.send_header('Content-Length', len(data))
         req.end_headers()
         req.write(data)
-        #raise RequestDone
-
