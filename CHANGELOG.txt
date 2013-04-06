@@ -1,5 +1,36 @@
 In Development
 
+ * The corresponding row in the rank table is now deleted when a ticket is
+   deleted.
+
+ * Implemented a better algorithm for assigning a default rank when tickets have
+   been deleted.
+
+ * Added some checks to detect ranks without tickets and tickets without ranks,
+   and clean up the tables.  These new checks will require you to run a
+   trac-admin env upgrade.
+
+ * Changed queries to use single quotes for better compatibility with
+   PostgreSQL.
+
+TracBacklog 0.3.0 (March 1, 2013)
+
+ * Added the ability to send tickets to the top or bottom via a context menu.
+   A huge thanks to Brent Atkinson for implementing this feature.
+
+ * TICKET_MODIFY is no longer required to view the backlog, only TICKET_VIEW.
+   Modifying the backlog now requires BACKLOG_MODIFY.  Patch by Brent Atkinson.
+
+ * Added a preference pane to allow users to customize what they see in the
+   backlog.  Patch by Brent Atkinson.
+
+ * Added a Content-Length to the response header, allowing tracd to work
+ * correctly.  Patch by Hiroyuki Wada.
+
+ * Fixed the source distribution on Python 2.6.
+
+ * Added support for Trac 0.12 and 1.0.
+
 TracBacklog 0.2.2 (October 10, 2011)
 
  * Fixed a bug where tickets were missing in the unscheduled view after a
